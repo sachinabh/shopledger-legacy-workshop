@@ -2,6 +2,8 @@ var assert = require('node:assert/strict');
 var test = require('node:test');
 var orders = require('../lib/orders');
 var ledger = require('../lib/ledger');
+var store = require('../lib/store');
+var customers = require('../routes/customers');
 
 var orderDb = { orders: [
   { id: 1, date: '28/12/2021' },
@@ -46,4 +48,19 @@ test('Khata records the same rounded amount on the receipt and account', functio
   var result = ledger.recordSettlement(db, 1, '0.015', 'upi');
   assert.equal(result.settlement.amount, 0.02);
   assert.equal(result.customer.totalSettled, 0.02);
+});
+
+test('the settlement audit records the credited amount', function (t) {
+  var db = { customers: [{ id: 1, name: 'Test customer' }], nextSettlementId: 1 };
+  t.mock.method(store, 'read', function () { return db; });
+  t.mock.method(store, 'write', function () {});
+  var route = customers.stack.find(function (layer) {
+    return layer.route && layer.route.path === '/customers/:id/settle';
+  });
+  var response = {
+    status: function (code) { assert.equal(code, 201); return this; },
+    json: function () {}
+  };
+  route.route.stack[0].handle({ params: { id: 1 }, body: { amount: '0.015' } }, response);
+  assert.match(db.auditLog[0].details, /settled ₹0\.02 via UPI/);
 });
