@@ -25,32 +25,13 @@ router.get('/reports/gst-reconciliation', function (req, res) {
 router.post('/pricing/preview', function (req, res) {
   var db = store.read();
   var body = req.body || {};
-  var rawItems = body.items || [];
-  var resolved = [];
+  var resolved = pricing.resolveItems(db.products, body.items === undefined ? [] : body.items);
+  if (resolved.error) return res.status(400).json({ error: resolved.error });
 
-  for (var i = 0; i < rawItems.length; i++) {
-    var p = null;
-    for (var j = 0; j < db.products.length; j++) {
-      if (db.products[j].id == rawItems[i].id) {
-        p = db.products[j];
-        break;
-      }
-    }
-    if (p && rawItems[i].qty > 0) {
-      resolved.push({
-        id: p.id,
-        name: p.name,
-        hsn: p.hsn,
-        price: p.price,
-        qty: Number(rawItems[i].qty)
-      });
-    }
-  }
-
-  var sub = pricing.subtotal(resolved);
+  var sub = pricing.subtotal(resolved.items);
   var code = coupons.normalizeCode(body.coupon);
   var couponStatus = coupons.validate(code, sub);
-  var totals = pricing.computeTotals(resolved, couponStatus.valid ? code : '');
+  var totals = pricing.computeTotals(resolved.items, couponStatus.valid ? code : '');
 
   res.json({
     totals: totals,
