@@ -2,6 +2,7 @@ var allProducts = [];
 var cartQuantities = {}; // productId -> qty
 var activeCategory = 'all';
 var customersList = [];
+var previewVersion = 0;
 
 function get(url, cb) {
   var x = new XMLHttpRequest();
@@ -20,6 +21,10 @@ function post(url, data, cb) {
   var x = new XMLHttpRequest();
   x.open('POST', url);
   x.setRequestHeader('Content-Type', 'application/json');
+  x.timeout = 15000;
+  x.onerror = x.ontimeout = function () {
+    cb(0, { error: 'Request failed. Check whether it was recorded before trying again.' });
+  };
   x.onload = function () {
     var parsed = {};
     try {
@@ -161,6 +166,7 @@ function getSelectedCartItems() {
 }
 
 function updateCartPreview() {
+  var version = ++previewVersion;
   var items = getSelectedCartItems();
   var countEl = document.getElementById('cart-count');
   var listEl = document.getElementById('cart-items-list');
@@ -195,8 +201,20 @@ function updateCartPreview() {
   listEl.className = '';
   listEl.innerHTML = miniHtml;
 
+  document.getElementById('preview-subtotal').textContent = '—';
+  document.getElementById('preview-discount').textContent = '—';
+  document.getElementById('preview-tax').textContent = '—';
+  document.getElementById('preview-total').textContent = '—';
+  feedbackEl.className = 'field-hint';
+  feedbackEl.textContent = '';
+
   post('/api/pricing/preview', { items: items, coupon: couponCode }, function (status, res) {
-    if (!res || !res.totals) return;
+    if (version !== previewVersion) return;
+    if (!res || !res.totals) {
+      feedbackEl.className = 'field-hint err';
+      feedbackEl.textContent = 'Could not update the cart price.';
+      return;
+    }
     var t = res.totals;
     document.getElementById('preview-subtotal').textContent = fmtMoney(t.subtotal);
     document.getElementById('preview-discount').textContent = '-' + fmtMoney(t.discount);
@@ -271,6 +289,9 @@ function loadOrders() {
       }).join(', ');
 
       var st = o.status || 'completed';
+      var dispatchBtn = st === 'pending'
+        ? ' <button type="button" class="btn btn-ghost" onclick="dispatchOrder(' + o.id + ')">Mark dispatched</button>'
+        : '';
       var cancelBtn = st !== 'cancelled'
         ? ' <button type="button" class="btn btn-danger-outline" onclick="cancelOrder(' + o.id + ')">Cancel</button>'
         : '';
@@ -289,7 +310,7 @@ function loadOrders() {
         '<td><span class="status-pill ' + st + '">' + st + '</span></td>' +
         '<td class="r" style="white-space:nowrap">' +
         '<a class="btn-link" href="/orders/' + o.id + '/invoice" target="_blank">Invoice &nearr;</a>' +
-        cancelBtn +
+        dispatchBtn + cancelBtn +
         '</td>' +
         '</tr>';
     }
@@ -301,6 +322,18 @@ function loadOrders() {
     document.querySelector('#orders tbody').innerHTML = html;
   });
 }
+
+window.dispatchOrder = function (orderId) {
+  var msgEl = document.getElementById('orders-action-msg');
+  post('/api/orders/' + orderId + '/dispatch', {}, function (status, res) {
+    msgEl.className = status === 200 ? 'ok' : 'err';
+    msgEl.textContent = status === 200 ? 'Order #' + orderId + ' dispatched.' : res.error || 'Dispatch failed';
+    if (status === 200) {
+      loadOrders();
+      loadDashboardSummary();
+    }
+  });
+};
 
 window.cancelOrder = function (orderId) {
   var msgEl = document.getElementById('orders-action-msg');
@@ -499,6 +532,8 @@ document.getElementById('clear-cart').onclick = function () {
 };
 
 document.getElementById('place').onclick = function () {
+  var button = this;
+  if (button.disabled) return;
   var items = getSelectedCartItems();
   var msg = document.getElementById('msg');
   if (!items.length) {
@@ -517,7 +552,9 @@ document.getElementById('place').onclick = function () {
     coupon: document.getElementById('coupon').value
   };
 
+  button.disabled = true;
   post('/api/orders', payload, function (status, res) {
+    button.disabled = false;
     if (status === 201) {
       cartQuantities = {};
       msg.className = 'ok';
@@ -529,7 +566,7 @@ document.getElementById('place').onclick = function () {
       loadCustomersDropdown();
     } else {
       msg.className = 'err';
-      msg.innerHTML = (res && res.error) ? res.error : 'Order failed';
+      msg.textContent = (res && res.error) ? res.error : 'Order failed';
     }
   });
 };
@@ -547,17 +584,21 @@ document.getElementById('btn-reset-orders').onclick = function () {
 };
 
 document.getElementById('btn-record-settlement').onclick = function () {
+  var button = this;
+  if (button.disabled) return;
   var custId = document.getElementById('settle-customer').value;
   var amount = document.getElementById('settle-amount').value; // string from input
   var mode = document.getElementById('settle-mode').value;
   var note = document.getElementById('settle-note').value;
   var khataMsg = document.getElementById('khata-msg');
 
+  button.disabled = true;
   post('/api/customers/' + custId + '/settle', {
     amount: amount,
     mode: mode,
     note: note
   }, function (status, res) {
+    button.disabled = false;
     if (status === 201) {
       khataMsg.className = 'ok';
       khataMsg.textContent = 'Recorded settlement for ' + res.customer.name + '. Updated balance: ' + fmtMoney(res.customer.balance);
